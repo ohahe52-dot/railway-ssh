@@ -57,11 +57,19 @@ async def keep_hf_alive():
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{HF_SPACE_URL}/health",
-                    timeout=aiohttp.ClientTimeout(total=15),
+                    timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
-                    logger.info(f"💓 HF Space ping: {resp.status}")
+                    if resp.status == 200:
+                        logger.info(f"💓 HF Space alive: {resp.status}")
+                    else:
+                        logger.warning(f"⚠️ HF Space ping status: {resp.status}")
+        except aiohttp.ClientConnectorError as e:
+            logger.warning(f"⚠️ HF ping - Cannot connect: {e}")
+            logger.warning(f"   Kiểm tra HF_SPACE_URL = {HF_SPACE_URL}")
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ HF ping - Timeout (HF Space đang cold start, bình thường)")
         except Exception as e:
-            logger.warning(f"⚠️ HF ping failed: {e}")
+            logger.warning(f"⚠️ HF ping - {type(e).__name__}: {e}")
         await asyncio.sleep(600)  # 10 phút
 
 
