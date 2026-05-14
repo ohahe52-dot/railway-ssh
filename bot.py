@@ -1,4 +1,4 @@
-# main.py - Đặt tên chính xác là main.py
+# bot.py - Phiên bản hoàn chỉnh
 import discord
 import aiohttp
 import os
@@ -7,16 +7,20 @@ from fastapi import FastAPI, Request
 import uvicorn
 import threading
 
+print("🚀 Starting Discord Proxy Bot...")
+
 # ============ DISCORD BOT ============
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
 HUGGINGFACE_WEBHOOK_URL = os.getenv("HUGGINGFACE_WEBHOOK_URL", "")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 
 @bot.event
 async def on_ready():
     print(f"✅ Proxy Bot đã sẵn sàng: {bot.user}")
+    print(f"📊 Đang hoạt động trên {len(bot.guilds)} server")
 
 @bot.event
 async def on_message(message):
@@ -27,7 +31,7 @@ async def on_message(message):
     
     if not HUGGINGFACE_WEBHOOK_URL:
         print("⚠️ HUGGINGFACE_WEBHOOK_URL chưa được cấu hình")
-        await message.channel.send("Bot đang được cấu hình, vui lòng thử lại sau!")
+        await message.channel.send("🤖 Bot đang được cấu hình, vui lòng thử lại sau!")
         return
     
     async with aiohttp.ClientSession() as session:
@@ -69,14 +73,16 @@ def run_api():
     uvicorn.run(app, host="0.0.0.0", port=8080)
 
 def run_bot():
-    token = os.getenv("DISCORD_TOKEN")
-    if not token:
+    if not DISCORD_TOKEN:
         print("❌ DISCORD_TOKEN không được cấu hình!")
+        print("🔧 Hãy set biến môi trường DISCORD_TOKEN trên Railway")
         return
-    bot.run(token)
+    bot.run(DISCORD_TOKEN)
 
 if __name__ == "__main__":
-    print("🚀 Starting Discord Proxy Bot...")
+    if not DISCORD_TOKEN:
+        print("⚠️ CẢNH BÁO: DISCORD_TOKEN chưa được cấu hình!")
+        print("🔧 Vào Railway Dashboard → Variables → Thêm DISCORD_TOKEN")
     
     # Chạy API server
     api_thread = threading.Thread(target=run_api, daemon=True)
