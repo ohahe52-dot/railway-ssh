@@ -16,6 +16,7 @@ bot = discord.Client(intents=intents)
 
 HUGGINGFACE_WEBHOOK_URL = os.getenv("HUGGINGFACE_WEBHOOK_URL", "")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 @bot.event
 async def on_ready():
