@@ -1,3 +1,4 @@
+# main.py - Đặt tên chính xác là main.py
 import discord
 import aiohttp
 import os
@@ -6,9 +7,9 @@ from fastapi import FastAPI, Request
 import uvicorn
 import threading
 
-# ============ PHẦN 1: DISCORD BOT ============
+# ============ DISCORD BOT ============
 intents = discord.Intents.default()
-intents.message_content = True  # BẮT BUỘC - để đọc nội dung tin nhắn
+intents.message_content = True
 bot = discord.Client(intents=intents)
 
 HUGGINGFACE_WEBHOOK_URL = os.getenv("HUGGINGFACE_WEBHOOK_URL", "")
@@ -24,7 +25,11 @@ async def on_message(message):
     
     print(f"📩 Tin nhắn từ {message.author}: {message.content[:50]}...")
     
-    # Gửi tin nhắn sang Hugging Face để xử lý AI
+    if not HUGGINGFACE_WEBHOOK_URL:
+        print("⚠️ HUGGINGFACE_WEBHOOK_URL chưa được cấu hình")
+        await message.channel.send("Bot đang được cấu hình, vui lòng thử lại sau!")
+        return
+    
     async with aiohttp.ClientSession() as session:
         try:
             payload = {
@@ -37,13 +42,13 @@ async def on_message(message):
                 print(f"📤 Gửi sang HF, status: {resp.status}")
         except Exception as e:
             print(f"❌ Lỗi gửi sang HF: {e}")
+            await message.channel.send("⚠️ Lỗi kết nối đến AI server, vui lòng thử lại!")
 
-# ============ PHẦN 2: FASTAPI SERVER (nhận phản hồi từ HF) ============
+# ============ FASTAPI SERVER ============
 app = FastAPI()
 
 @app.post("/send_message")
 async def send_message(request: Request):
-    """Endpoint để HF gửi phản hồi AI về"""
     data = await request.json()
     channel_id = int(data.get("channel_id"))
     content = data.get("content", "")
@@ -51,22 +56,32 @@ async def send_message(request: Request):
     channel = bot.get_channel(channel_id)
     if channel:
         await channel.send(content)
-        print(f"✅ Đã gửi phản hồi về Discord: {content[:50]}...")
+        print(f"✅ Đã gửi phản hồi: {content[:50]}...")
         return {"status": "sent"}
     return {"status": "error", "message": "Channel not found"}
 
-# ============ PHẦN 3: CHẠY CẢ 2 ============
+@app.get("/health")
+async def health():
+    return {"status": "alive", "bot_ready": bot.is_ready()}
+
+# ============ MAIN ============
 def run_api():
     uvicorn.run(app, host="0.0.0.0", port=8080)
 
 def run_bot():
     token = os.getenv("DISCORD_TOKEN")
     if not token:
-        raise ValueError("DISCORD_TOKEN not set")
+        print("❌ DISCORD_TOKEN không được cấu hình!")
+        return
     bot.run(token)
 
 if __name__ == "__main__":
-    # Chạy API server trong thread riêng
-    threading.Thread(target=run_api, daemon=True).start()
-    # Chạy bot (blocking)
+    print("🚀 Starting Discord Proxy Bot...")
+    
+    # Chạy API server
+    api_thread = threading.Thread(target=run_api, daemon=True)
+    api_thread.start()
+    print("✅ API server started on port 8080")
+    
+    # Chạy bot
     run_bot()
