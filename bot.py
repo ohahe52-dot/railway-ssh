@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 import os
 import sys
 
@@ -47,6 +48,34 @@ intents.message_content = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 
+def _guess_attachment_type(attachment: discord.Attachment) -> str | None:
+    return attachment.content_type or mimetypes.guess_type(attachment.filename or "")[0]
+
+def _build_attachment_payload(attachments: list[discord.Attachment]) -> list[dict]:
+    payload = []
+    for item in attachments:
+        try:
+            is_spoiler = item.is_spoiler()
+        except Exception:
+            is_spoiler = False
+
+        payload.append(
+            {
+                "id": str(item.id),
+                "url": item.url,
+                "proxy_url": item.proxy_url,
+                "filename": item.filename,
+                "content_type": _guess_attachment_type(item),
+                "size": int(item.size or 0),
+                "width": getattr(item, "width", None),
+                "height": getattr(item, "height", None),
+                "description": getattr(item, "description", None),
+                "is_spoiler": is_spoiler,
+            }
+        )
+    return payload
+
+
 # ─────────────────────────────────────────────────────────
 # Keep HF Space alive — ping mỗi 10 phút
 # ─────────────────────────────────────────────────────────
@@ -76,7 +105,14 @@ async def keep_hf_alive():
 # ─────────────────────────────────────────────────────────
 # Gọi HF Space để xử lý AI
 # ─────────────────────────────────────────────────────────
-async def call_hf_chat(content: str, author: str, channel_id: str, user_id: str) -> str:
+async def call_hf_chat(
+    content: str,
+    author: str,
+    channel_id: str,
+    user_id: str,
+    attachments: list[dict] | None = None,
+    guild_id: str | None = None,
+) -> str:
     """
     Gọi HF Space /chat và trả về câu trả lời.
     Tự retry nếu HF Space đang cold start.
@@ -86,9 +122,10 @@ async def call_hf_chat(content: str, author: str, channel_id: str, user_id: str)
         "author": author,
         "channel_id": channel_id,
         "user_id": user_id,
+        "guild_id": guild_id or "",
+        "attachments": attachments or [],
     }
-
-    timeout = aiohttp.ClientTimeout(total=90)  # HF cold start có thể mất ~60s
+    timeout = aiohttp.ClientTimeout(total=180)
 
     for attempt in range(3):
         try:
@@ -162,18 +199,31 @@ async def on_message(message: discord.Message):
         return
 
     # Bỏ qua tin quá ngắn
-    if len(message.content.strip()) < 2:
+    attachment_payload = _build_attachment_payload(list(message.attachments))
+
+    if len(message.content.strip()) < 2 and not attachment_payload:
         return
 
     logger.info(f"📩 [{message.author.display_name}] #{message.channel}: {message.content[:60]}")
 
     # Hiện "đang gõ..." trong lúc chờ AI
+    if attachment_payload:
+        logger.info(
+            "Forwarding attachments to HF: "
+            + ", ".join(
+                f"{a['filename']} ({a.get('content_type') or 'unknown'}, {a['size']} bytes)"
+                for a in attachment_payload
+            )
+        )
+
     async with message.channel.typing():
         reply = await call_hf_chat(
             content=message.content,
             author=message.author.display_name,
             channel_id=str(message.channel.id),
             user_id=str(message.author.id),
+            attachments=attachment_payload,
+            guild_id=str(message.guild.id) if message.guild else "",
         )
 
     # Tách tin dài > 2000 ký tự (giới hạn Discord)
