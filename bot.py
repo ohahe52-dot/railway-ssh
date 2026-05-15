@@ -23,6 +23,7 @@ HF_SPACE_URL     = os.environ.get("HF_SPACE_URL", "").rstrip("/")
 # Ví dụ: https://zxccxc-BotRobin.hf.space
 CHANNEL_ID       = os.environ.get("CHANNEL_ID", "")          # Để trống = mọi kênh
 COMMAND_PREFIX   = os.environ.get("COMMAND_PREFIX", "!")
+STREAM_EDIT_INTERVAL = float(os.environ.get("STREAM_EDIT_INTERVAL", "0.8"))
 
 if not HF_SPACE_URL:
     print("❌ Thiếu HF_SPACE_URL! Set trong Railway Variables.")
@@ -105,6 +106,83 @@ async def keep_hf_alive():
 # ─────────────────────────────────────────────────────────
 # Gọi HF Space để xử lý AI
 # ─────────────────────────────────────────────────────────
+
+async def call_hf_stream(message: discord.Message, payload: dict) -> bool:
+    """Gọi /stream (SSE), edit Discord message dần dần. True = thành công."""
+    timeout = aiohttp.ClientTimeout(total=180, connect=10)
+    try:
+        sent_msg = await message.reply("⏳")
+    except Exception as e:
+        logger.error(f"Cannot send placeholder: {e}")
+        return False
+
+    buffer    = ""
+    last_edit = 0.0
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{HF_SPACE_URL}/stream",
+                json=payload,
+                headers={"Accept": "text/event-stream"},
+            ) as resp:
+                if resp.status != 200:
+                    await sent_msg.edit(content=f"❌ Server lỗi: {resp.status}")
+                    return False
+
+                async for raw_bytes in resp.content:
+                    line = raw_bytes.decode("utf-8", errors="ignore").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    try:
+                        import json as _json
+                        data = _json.loads(raw)
+                    except Exception:
+                        continue
+
+                    if data.get("error"):
+                        await sent_msg.edit(content=f"❌ {data['error']}")
+                        return False
+
+                    if data.get("done"):
+                        if buffer:
+                            final = buffer[-1990:] if len(buffer) > 1990 else buffer
+                            try:
+                                await sent_msg.edit(content=final)
+                            except Exception:
+                                pass
+                        break
+
+                    chunk = data.get("chunk", "")
+                    if not chunk:
+                        continue
+                    buffer += chunk
+
+                    now = asyncio.get_event_loop().time()
+                    if now - last_edit >= STREAM_EDIT_INTERVAL:
+                        display = (buffer[-1990:] if len(buffer) > 1990 else buffer) + " ▌"
+                        try:
+                            await sent_msg.edit(content=display)
+                        except discord.HTTPException as e:
+                            if e.status != 429:
+                                logger.warning(f"Edit failed: {e}")
+                        last_edit = now
+
+        logger.info(f"Stream OK: {len(buffer)} chars")
+        return True
+
+    except asyncio.TimeoutError:
+        await sent_msg.edit(content=buffer or "⏳ Timeout!")
+        return False
+    except Exception as e:
+        logger.error(f"Stream error: {e}")
+        try:
+            await sent_msg.edit(content=buffer or f"❌ {e}")
+        except Exception:
+            pass
+        return False
+
 async def call_hf_chat(
     content: str,
     author: str,
@@ -216,26 +294,39 @@ async def on_message(message: discord.Message):
             )
         )
 
-    async with message.channel.typing():
-        reply = await call_hf_chat(
-            content=message.content,
-            author=message.author.display_name,
-            channel_id=str(message.channel.id),
-            user_id=str(message.author.id),
-            attachments=attachment_payload,
-            guild_id=str(message.guild.id) if message.guild else "",
-        )
+    payload = {
+        "content":     message.content,
+        "author":      message.author.display_name,
+        "channel_id":  str(message.channel.id),
+        "user_id":     str(message.author.id),
+        "guild_id":    str(message.guild.id) if message.guild else "",
+        "attachments": attachment_payload,
+    }
 
-    # Tách tin dài > 2000 ký tự (giới hạn Discord)
-    if len(reply) <= 2000:
-        await message.reply(reply)
-    else:
-        chunks = [reply[i:i+1990] for i in range(0, len(reply), 1990)]
-        for i, chunk in enumerate(chunks):
-            if i == 0:
-                await message.reply(chunk)
+    async with message.channel.typing():
+        # Thử stream trước
+        stream_ok = await call_hf_stream(message, payload)
+
+        # Fallback /chat nếu stream fail
+        if not stream_ok:
+            logger.warning("Stream failed, fallback to /chat")
+            reply = await call_hf_chat(
+                content=message.content,
+                author=message.author.display_name,
+                channel_id=str(message.channel.id),
+                user_id=str(message.author.id),
+                attachments=attachment_payload,
+                guild_id=str(message.guild.id) if message.guild else "",
+            )
+            if len(reply) <= 2000:
+                await message.reply(reply)
             else:
-                await message.channel.send(chunk)
+                chunks = [reply[i:i+1990] for i in range(0, len(reply), 1990)]
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        await message.reply(chunk)
+                    else:
+                        await message.channel.send(chunk)
 
 
 # ─────────────────────────────────────────────────────────
